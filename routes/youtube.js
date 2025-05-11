@@ -1,0 +1,188 @@
+const express = require('express');
+const router = express.Router();
+const ytService = require('../services/ytService');
+const { execYtDlp } = require('../utils/execYtDlp');
+const fs = require('fs');
+const path = require('path');
+
+// Test endpoint to check yt-dlp installation
+router.get('/test', async (req, res) => {
+    try {
+        console.log('Testing yt-dlp installation...');
+        const { stdout } = await execYtDlp('yt-dlp --version');
+        console.log('yt-dlp test successful:', stdout.trim());
+        res.json({ 
+            status: 'success', 
+            version: stdout.trim(),
+            message: 'yt-dlp is installed and working correctly'
+        });
+    } catch (error) {
+        console.error('yt-dlp test failed:', error);
+        res.status(500).json({ 
+            status: 'error',
+            message: error.message || 'Failed to verify yt-dlp installation'
+        });
+    }
+});
+
+// Get video information
+router.post('/info', async (req, res) => {
+    try {
+        const { url } = req.body;
+        console.log('Received video info request for URL:', url);
+
+        if (!url) {
+            console.error('URL is missing in request');
+            return res.status(400).json({ error: 'URL is required' });
+        }
+
+        console.log('Fetching video information...');
+        const info = await ytService.getVideoInfo(url);
+        console.log('Successfully fetched video information');
+        
+        res.json(info);
+    } catch (error) {
+        console.error('Error in /info endpoint:', error);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ 
+            error: error.message || 'Failed to fetch video information',
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+// Download video
+router.post('/download', async (req, res) => {
+    try {
+        const { url, format } = req.body;
+        console.log('Received download request for URL:', url, 'format:', format);
+
+        if (!url || !format) {
+            console.error('Missing required parameters:', { url: !!url, format: !!format });
+            return res.status(400).json({ error: 'URL and format are required' });
+        }
+
+        console.log('Starting video download...');
+        const filePath = await ytService.downloadVideo(url, format);
+        
+        if (!fs.existsSync(filePath)) {
+            console.error('Downloaded file not found at path:', filePath);
+            throw new Error('Downloaded file not found');
+        }
+
+        console.log('File downloaded successfully, sending to client...');
+        const fileName = path.basename(filePath);
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        
+        const fileStream = fs.createReadStream(filePath);
+        fileStream.pipe(res);
+
+        // Clean up the file after sending
+        fileStream.on('end', () => {
+            console.log('File sent, cleaning up...');
+            fs.unlink(filePath, (err) => {
+                if (err) console.error('Error deleting file:', err);
+                else console.log('File cleanup completed');
+            });
+        });
+
+        fileStream.on('error', (err) => {
+            console.error('Error streaming file:', err);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Error streaming file' });
+            }
+        });
+    } catch (error) {
+        console.error('Error in /download endpoint:', error);
+        console.error('Error stack:', error.stack);
+        if (!res.headersSent) {
+            res.status(500).json({ 
+                error: error.message || 'Failed to download video',
+                details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            });
+        }
+    }
+});
+
+// Get available subtitles
+router.post('/subtitles/list', async (req, res) => {
+    try {
+        const { url } = req.body;
+        console.log('Received subtitle list request for URL:', url);
+
+        if (!url) {
+            console.error('URL is missing in request');
+            return res.status(400).json({ error: 'URL is required' });
+        }
+
+        console.log('Fetching available subtitles...');
+        const subtitles = await ytService.getAvailableSubtitles(url);
+        console.log('Successfully fetched subtitles');
+        
+        res.json({ subtitles });
+    } catch (error) {
+        console.error('Error in /subtitles/list endpoint:', error);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ 
+            error: error.message || 'Failed to fetch available subtitles',
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+// Download subtitles
+router.post('/subtitles', async (req, res) => {
+    try {
+        const { url, lang, autoGenerated } = req.body;
+        console.log('Received subtitle download request:', { url, lang, autoGenerated });
+
+        if (!url || !lang) {
+            console.error('Missing required parameters:', { url: !!url, lang: !!lang });
+            return res.status(400).json({ error: 'URL and language are required' });
+        }
+
+        console.log('Starting subtitle download...');
+        const filePath = await ytService.downloadSubtitles(url, lang, autoGenerated);
+        
+        if (!fs.existsSync(filePath)) {
+            console.error('Downloaded subtitle file not found at path:', filePath);
+            throw new Error('Downloaded subtitle file not found');
+        }
+
+        console.log('Subtitle file downloaded successfully, sending to client...');
+        const fileName = path.basename(filePath);
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        
+        const fileStream = fs.createReadStream(filePath);
+        fileStream.pipe(res);
+
+        // Clean up the file after sending
+        fileStream.on('end', () => {
+            console.log('File sent, cleaning up...');
+            fs.unlink(filePath, (err) => {
+                if (err) console.error('Error deleting file:', err);
+                else console.log('File cleanup completed');
+            });
+        });
+
+        fileStream.on('error', (err) => {
+            console.error('Error streaming file:', err);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Error streaming file' });
+            }
+        });
+    } catch (error) {
+        console.error('Error in /subtitles endpoint:', error);
+        console.error('Error stack:', error.stack);
+        if (!res.headersSent) {
+            res.status(500).json({ 
+                error: error.message || 'Failed to download subtitles',
+                details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            });
+        }
+    }
+});
+
+module.exports = router; 
